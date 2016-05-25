@@ -27,15 +27,15 @@ def create_jbod(disk, tool):
     :param tool: tools used for JBOD creation, storcli and perccli are supported
     :return: a list contains disk OS names, like ["/dev/sda", "/dev/sdb", ...]
     '''
-    for slot_id in disk["sid"]:
+    for slot_id in disk["slotId"]:
         cmd = [tool, slot_id, "set", "jbod"]
         exit_code = subprocess.call(cmd, shell=False)
         assert exit_code == 0, "Can't create JBOD for drive " + slot_id
     time.sleep(1)  #Wait 1 second for OS to scan new drives
     disk_list = []
-    scsi_id_bits = disk["scsi"].split(":")
+    scsi_id_bits = disk["scsiId"].split(":")
     #map jbod to disk device name with JBOD
-    for did in disk["did"]:
+    for deviceId in disk["deviceId"]:
         #scsi id is used to map virtual disk to new JBOD
         #scsi id is made up of adapter:scsi:dev:lun as below:
         #   adapter id [host]: controller ID, ascending from 0.
@@ -45,7 +45,7 @@ def create_jbod(disk, tool):
         #   device id [target]: displayed as DID in Megaraid for each physical drives.
         #   LUN id [LUN]: Logic Unit Numbers, LUN is not used for drive mapping
         scsi_info = scsi_id_bits[:]
-        scsi_info[2] = str(did)
+        scsi_info[2] = str(deviceId)
         anti_patten = re.compile(":".join(scsi_info[0:3]))  #anti-patten to exclude scsi id for RAID
         scsi_info[1] = '[0-9]*'
         patten = re.compile(":".join(scsi_info[0:3]))
@@ -63,7 +63,7 @@ def create_jbod(disk, tool):
             if patten.search(line) and not anti_patten.search(line) and line.find("part") == -1:
             #lines contain part is partition info
                 disk_name = line.split("/")[-1]
-        assert disk_name, "Disk OS name is not found for did " + str(did)
+        assert disk_name, "Disk OS name is not found for deviceId " + str(deviceId)
         disk_list.append("/dev/" + disk_name)
     return disk_list
 
@@ -73,10 +73,10 @@ if __name__ == '__main__':
     #ARG_LIST.d should include at least following items as a string
     #   {
     #   "devName": "/dev/sdx"
-    #   "sid": "/c0/e252/sx"
-    #   "did": "0"
-    #   "vd": "/c0/vx"
-    #   "scsi": "0:0:0"
+    #   "slotId": "/c0/e252/sx"
+    #   "deviceId": "0"
+    #   "virtualDisk": "/c0/vx"
+    #   "scsiId": "0:0:0"
     #   }
     for argu in ARG_LIST.d:
         disk_argument_list.append(json.loads(argu))
@@ -93,14 +93,14 @@ if __name__ == '__main__':
 
     disk_list_with_jbod = []
     for disk_argument in disk_argument_list:
-        #if vd doesn't exit, push disk directly into disk list
-        if not disk_argument["vd"]:
-            disk_list_with_jbod.append(disk_argument["diskName"])
+        #if virtualDisk doesn't exit, push disk directly into disk list
+        if not disk_argument["virtualDisk"]:
+            disk_list_with_jbod.append("/dev/" + disk_argument["diskName"])
         else:
             command = [tool_path, "/c0", "set", "jbod=on"]
             exit_status = subprocess.call(command, shell=False)
             assert exit_status == 0, "Failed to enable jbod"
-            command = [tool_path, disk_argument["vd"], "del", "force"]
+            command = [tool_path, disk_argument["virtualDisk"], "del", "force"]
             #force option will delete MBR and other items
             exit_status = subprocess.call(command, shell=False)
             assert exit_status == 0, "Failed to run delete raid commands"
