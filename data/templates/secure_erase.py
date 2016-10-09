@@ -21,6 +21,9 @@ from filecmp import cmp as file_compare
 
 ARG_PARSER = argparse.ArgumentParser(description='RackHD secure-erase argument')
 
+ARG_PARSER.add_argument("-i", action="store", default="undefined", type=str,
+                        help="Task ids used for api notification")
+
 ARG_PARSER.add_argument("-d", action="append", default=[], type=str,
                         help="Disks to be erased with arguments")
 
@@ -441,6 +444,14 @@ def scrub_secure_erase(disk_name, se_option):
     command = ["scrub", "-f", "-p", scrub_option, disk_name]  # -f is to force erase
     return secure_erase_base(disk_name, cmd=command)
 
+def run_poller(task_id):
+    """
+    Run secure Erase poller tool
+    :taskId: tasks id for secure erase
+    :return: a dict includes SE command exitcode and SE message
+    """
+    cmd = "python secure_erase_poller.py -i " + task_id
+    subprocess.call(cmd, shell=True)
 
 if __name__ == '__main__':
     TOOL_MAPPER = {
@@ -451,6 +462,8 @@ if __name__ == '__main__':
     }
     tool = ARG_LIST.t
     option = ARG_LIST.o
+    task_id = ARG_LIST.i
+    assert task_id != "undefined", "No taskId is delivered to secure erase script"
     assert tool in ["scrub", "hdparm", "sg_format", "sg_sanitize"], \
         "Secure erase tool is not supported"
 
@@ -468,6 +481,7 @@ if __name__ == '__main__':
 
     # Run multiple processes for SE
     erase_output_list = []
+    pool.apply_async(run_poller, args=(task_id,))
     for disk in disk_list:
         erase_output = {"seMethod": tool, "disk": disk}
         result = pool.apply_async(TOOL_MAPPER[tool], args=(disk, option))
