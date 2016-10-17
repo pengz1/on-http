@@ -2,6 +2,8 @@
 
 # Copyright 2016, EMC, Inc.
 
+# -*- coding: UTF-8 -*-
+
 """
 This script is to do Secure Erase (SE) on a compute node
 Four methods/tools are integrated in this scripts
@@ -20,6 +22,9 @@ from multiprocessing import cpu_count
 from filecmp import cmp as file_compare
 
 ARG_PARSER = argparse.ArgumentParser(description='RackHD secure-erase argument')
+
+ARG_PARSER.add_argument("-i", action="store", default='undefined', type=str,
+                        help="Secure erase taskId")
 
 ARG_PARSER.add_argument("-d", action="append", default=[], type=str,
                         help="Disks to be erased with arguments")
@@ -57,6 +62,147 @@ HDPARM_RETRY_EXITCODES = [5]
 COMMAND_LOG_MARKER = "\n==========================" \
                      "==========================\n"
 
+
+class ProgressParser:
+    """
+    Secure erase job progress parser.
+    """
+
+    def __init__(self, task_id, disks, se_param, se_tool):
+        self.task_id = task_id
+        self.disk_list = disks
+        self.interval = 10
+        self.param = se_param
+        self.tool = se_tool
+        self.se_duration = 0
+
+    def scrub_parser(self, log):
+        """
+        Secure erase job progress parser for scrub tool.
+        """
+        # Scrub version 2.5.2-2 example:
+        # scrub /dev/sdf
+        # scrub: using NNSA NAP-14.1-C patterns
+        # scrub: please verify that device size below is correct!
+        # scrub: scrubbing /dev/sdf1 1995650048 bytes (~1GB)
+        # scrub: random  |................................................|
+        # scrub: random  |................................................|
+        # scrub: 0x00    |................................................|
+        # scrub: verify  |................................................|
+
+        # Maximum dot count for each pass
+        MAX_DOT_COUNT = 48
+        # Scrub pass counts for different scrub methods, default pass count is 1
+        pass_counts = {"nnsa": 4, "dod": 4, "gutmann": 35, "schneier":7, "pfitzner7":7,
+                       "pfitzner33": 33, "usarmy": 3, "random2": 2, "old": 6, "fastold": 5}
+        pass_count = pass_counts[self.param]
+        count = 0
+        pattern = re.compile("^scrub: \w{4,6}\s*\|\.{" + str(MAX_DOT_COUNT) + "}\|")
+        last_line = ''
+        for line in log.readlines():
+            line = line.strip()
+            if pattern.match(line):
+                count += 1
+            elif line.startswith("scrub: "):
+                last_line = line
+        dot_count = len(last_line.split("|")[1])
+        # "|" is also counted as a dot for percentage calculation
+        percentage = (100.00/pass_count)*(count + (dot_count+1.0)/(MAX_DOT_COUNT+2.0))
+        return percentage
+
+    def get_hdparm_druation(self, log):
+        """
+        Secure erase job progress parser for scrub tool.
+        """
+        pattern = re.compile("(\d{1,4})min for SECURE ERASE UNIT. \
+                             (\d{1,4})min for ENHANCED SECURE ERASE UNIT.")
+        estimated_time = 0
+        for line in log.readlines():
+            match = pattern.match(line)
+            if match:
+                if self.param == "secure-erase":
+                    estimated_time = match.group(1)
+                else:
+                    estimated_time = match.group(2)
+                break
+        return estimated_time
+
+    def hdparm_parser(self, log, percent):
+        """
+        Secure erase job progress parser for scrub tool.
+        """
+        if self.se_duration == 0:
+            self.se_duration = self.get_hdparm_druation(log)
+        else:
+            percent += self.interval/(self.se_duration*60.00)
+            if percent > 100:
+                percent = 99.5
+        return percent
+
+    def sg_format_parser(self, log):
+        """
+        Secure erase job progress parser for scrub tool.
+        """
+        patterna = re.compile("Format in progress, (\d{1,3}\.{\d{1,3}})\% done", re.I)
+        patternb = re.compile("FORMAT Completed", re.I)
+        lines = log.readlines()
+        match = patterna.match(lines[-1])
+        if match:
+            return float(match.group(1))
+        match = patternb.match(lines[-2])
+        if match:
+            return 100
+        return 0
+
+    def sg_sanitize_parser(self):
+        """
+        Secure erase job progress parser for scrub tool.
+        """
+        return 'NA'
+
+    def send_progress_notification(self):
+        """
+        Secure erase job progress parser for scrub tool.
+        """
+        parser_mapper = {
+            "hdparm": self.hdparm_parser,
+            "scrub": self.scrub_parser,
+            "sg_format": self.sg_format_parser,
+            "sg_sanitize": self.sg_sanitize_parser
+        }
+        disk_count = len(self.disk_list)
+        percentage_list = [0.0]*disk_count
+        erase_start_flags = [False]*disk_count
+        payload = {
+            "taskId": self.task_id,
+            "progress": {"percentage": "0%", "description": "Secure erase started"}
+        }
+        poll_counter = 0
+        while True:
+            cmd = 'curl -X POST -H "Content-Type:application/json" ' \
+                  '-d \'{}\'http://172.31.128.1:8080/api/1.1/notification' \
+                .format(json.dumps(payload))
+            subprocess.call(cmd, shell=True)
+            for (index, value) in enumerate(self.disk_list):
+                if erase_start_flags[index]:
+                    # Check secure erase sub-progress is alive
+                    command = 'ps aux | grep {} | grep {} | sed "/grep/d"'.format(self.tool, value)
+                    erase_alive = subprocess.check_output(command, shell=True)
+                    log = open(value + '.log', 'r')
+                    percentage_list[index] = parser_mapper[self.tool](log)
+                    if not erase_alive:
+                        percentage_list[index] = 100
+                    else:
+                        percentage_list[index] = parser_mapper[self.tool](log)
+                else:
+                    erase_start_flags[index] = os.path.exists('/home/monorail/' + value + '.log')
+            payload["progress"]["percentage"] = sum(percentage_list)/disk_count
+            poll_counter += 1
+            payload["progress"]["description"] = "This is the {}th polling with {}s interval" \
+                .format(str(poll_counter), str(self.interval))
+            if payload["progress"]["percentage"] == 100:
+                break
+            time.sleep(self.interval)
 
 def create_jbod(disk_arg, raid_tool):
     """
@@ -101,7 +247,8 @@ def create_jbod(disk_arg, raid_tool):
             #   drwxr-xr-x 2 root root 300 May 19 03:15 ./
             #   drwxr-xr-x 5 root root 100 May 16 04:43 ../
             #   lrwxrwxrwx 1 root root   9 May 19 03:06 pci-0000:06:00.0-scsi-0:2:0:0 -> ../../sdf
-            #   lrwxrwxrwx 1 root root  10 May 19 03:06 pci-0000:06:00.0-scsi-0:2:0:0-part1 -> ../../sdf1
+            #   lrwxrwxrwx 1 root root  10 May 19 03:06 pci-0000:06:00.0-scsi-0:2:0:0-part1 ->
+            #   ../../sdf1
             #   lrwxrwxrwx 1 root root  10 May 19 02:31 pci-0000:06:00.0-scsi-0:2:1:0 -> ../../sda
             disk_name = ''
             for line in lines:
@@ -138,7 +285,8 @@ def convert_raid_to_jbod():
 
     # Idenfity tools used for raid operation
     raid_controller_vendor = ARG_LIST.v
-    assert raid_controller_vendor in RAID_VENDOR_LIST.keys(), "RAID controller vendor info is invalid"
+    assert raid_controller_vendor in RAID_VENDOR_LIST.keys(), \
+        "RAID controller vendor info is invalid"
     raid_tool = RAID_VENDOR_LIST[raid_controller_vendor]
     assert os.path.exists(raid_tool), "Overlay doesn't include tool path: " + raid_tool
 
@@ -370,7 +518,8 @@ def hdparm_secure_erase(disk_name, se_option):
     #
     # except for "supported" and "enabled", other items should have "not" before them
     if hdparm_option == "--security-erase":
-        pattern_se_support = re.compile(r'[\s\S]*(?!not)[\s]*supported[\s]*[\s\S]*enabled[\s]*not[\s]'
+        pattern_se_support = re.compile(r'[\s\S]*(?!not)[\s]*supported'
+                                        r'[\s]*[\s\S]*enabled[\s]*not[\s]'
                                         r'*locked[\s]*not[\s]*frozen[\s]*not[\s]*expired[\s\S]*')
     else:
         pattern_se_support = re.compile(r'[\s\S]*(?!not)[\s]*supported[\s]*[\s\S]*enabled[\s]*not'
@@ -441,6 +590,24 @@ def scrub_secure_erase(disk_name, se_option):
     command = ["scrub", "-f", "-p", scrub_option, disk_name]  # -f is to force erase
     return secure_erase_base(disk_name, cmd=command)
 
+def get_process_exit_status(async_result):
+    """
+    Get subprocess exit status
+    :param async_result: multiprocessing Pool async result object
+    :return: a dict includes process exit code and exit status description
+    """
+    process_result = {}
+    try:
+        process_exit_result = async_result.get()
+    except AssertionError as err:
+        process_result = {"exitcode": -1, "message": err}
+    else:
+        process_result["exitcode"] = process_exit_result["exit_code"]
+        if process_result["exit_code"] == 0:
+            process_result["message"] = "Secure erase completed successfully"
+        else:
+            process_result["message"] = process_exit_result["message"]
+    return process_result
 
 if __name__ == '__main__':
     TOOL_MAPPER = {
@@ -451,6 +618,7 @@ if __name__ == '__main__':
     }
     tool = ARG_LIST.t
     option = ARG_LIST.o
+    task_id = ARG_LIST.i
     assert tool in ["scrub", "hdparm", "sg_format", "sg_sanitize"], \
         "Secure erase tool is not supported"
 
@@ -459,13 +627,16 @@ if __name__ == '__main__':
 
     # Get process count we should started
     user_count = len(disk_list)
-    cpu_thread_count = cpu_count()
+    cpu_thread_count = cpu_count() - 1
     if user_count > cpu_thread_count:
         process_count = cpu_thread_count
     else:
         process_count = user_count
     pool = Pool(process_count)
 
+    #Get secure erase progress and send notification
+    progress_parser = ProgressParser(task_id, disk_list, option, tool)
+    progress_status = pool.apply_async(progress_parser.send_progress_notification, ())
     # Run multiple processes for SE
     erase_output_list = []
     for disk in disk_list:
@@ -474,30 +645,23 @@ if __name__ == '__main__':
         erase_output["poolExitStatus"] = result
         erase_output_list.append(erase_output)
 
+    progress_result = get_process_exit_status(progress_status)
     # Parse erase exit message
     # .get() is a method blocks main process
     erase_result_list = []
     for erase_output in erase_output_list:
         erase_result = {"seMethod": erase_output["seMethod"],
                         "disk": erase_output["disk"]}
-        try:
-            pool_exit_result = erase_output["poolExitStatus"].get()
-        except AssertionError as err:
-            erase_result["exitcode"] = -1
-            erase_result["message"] = err
-        else:
-            erase_result["exitcode"] = pool_exit_result["exit_code"]
-            if pool_exit_result["exit_code"] == 0:
-                erase_result["message"] = "Secure erase completed successfully"
-            else:
-                erase_result["message"] = pool_exit_result["message"]
+        erase_result.update(get_process_exit_status(erase_output["poolExitStatus"]))
         erase_result_list.append(erase_result)
 
     pool.close()
     pool.join()
 
-    print erase_result_list
+    if progress_result("exitcode"):
+        print progress_result["Message"]
 
+    print erase_result_list
     for erase_result in erase_result_list:
         if erase_result["exitcode"]:
             msg = "Drive %s failed to run secure erase with tool %s, error info are: \n %s" \
