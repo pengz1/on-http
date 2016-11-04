@@ -228,6 +228,7 @@ describe("Http.Services.Api.Profiles", function () {
 
             this.sandbox.stub(workflowApiService, 'findActiveGraphForTarget').resolves(undefined);
             this.sandbox.stub(taskProtocol, 'requestProperties').resolves();
+            this.sandbox.stub(taskProtocol, 'activeTaskExists').resolves();
 
             var promise = profileApiService.getProfileFromTaskOrNode(node);
 
@@ -235,6 +236,7 @@ describe("Http.Services.Api.Profiles", function () {
             .then(function() {
                 expect(workflowApiService.findActiveGraphForTarget).to.have.been.calledOnce;
                 expect(taskProtocol.requestProperties).to.not.be.called;
+                expect(taskProtocol.activeTaskExists).to.not.be.called;
                 expect(promise.reason().status).to.equal(500);
             });
         });
@@ -251,11 +253,13 @@ describe("Http.Services.Api.Profiles", function () {
 
             this.sandbox.stub(workflowApiService, 'findActiveGraphForTarget').resolves(undefined);
             this.sandbox.stub(taskProtocol, 'requestProperties').resolves();
+            this.sandbox.stub(taskProtocol, 'activeTaskExists').resolves();
 
             return profileApiService.getProfileFromTaskOrNode(node)
             .then(function(result) {
                 expect(workflowApiService.findActiveGraphForTarget).to.have.been.calledOnce;
                 expect(taskProtocol.requestProperties).to.not.be.called;
+                expect(taskProtocol.activeTaskExists).to.not.be.called;
                 expect(result).to.deep.equal(node.bootSettings);
             });
         });
@@ -265,11 +269,13 @@ describe("Http.Services.Api.Profiles", function () {
 
             this.sandbox.stub(workflowApiService, 'findActiveGraphForTarget').resolves(undefined);
             this.sandbox.stub(taskProtocol, 'requestProperties').resolves();
+            this.sandbox.stub(taskProtocol, 'activeTaskExists').resolves();
 
             return profileApiService.getProfileFromTaskOrNode(node)
             .then(function(result) {
                 expect(workflowApiService.findActiveGraphForTarget).to.have.been.calledOnce;
                 expect(taskProtocol.requestProperties).to.not.be.called;
+                expect(taskProtocol.activeTaskExists).to.not.be.called;
                 expect(result).to.deep.equal({
                     context: undefined,
                     profile: 'ipxe-info.ipxe',
@@ -287,16 +293,41 @@ describe("Http.Services.Api.Profiles", function () {
             this.sandbox.stub(workflowApiService, 'findActiveGraphForTarget').resolves(graph);
             this.sandbox.stub(taskProtocol, 'requestProfile').resolves('profile');
             this.sandbox.stub(taskProtocol, 'requestProperties').resolves({});
+            this.sandbox.stub(taskProtocol, 'activeTaskExists').resolves({taskId: "taskId"});
 
             return profileApiService.getProfileFromTaskOrNode(node)
             .then(function(result) {
                 expect(workflowApiService.findActiveGraphForTarget).to.have.been.calledOnce;
                 expect(taskProtocol.requestProfile).to.have.been.calledOnce;
                 expect(taskProtocol.requestProperties).to.have.been.calledOnce;
+                expect(taskProtocol.activeTaskExists).to.been.calledOnce;
                 expect(result).to.deep.equal({
                     context: graph.context,
-                    profile: 'profile',
-                    options: { kargs: null }
+                    profile: 'profile', 
+                    options: { kargs: null, taskId: 'taskId'},
+                });
+            });
+        });
+
+        it("render profile pass when having no active task and render succeed", function() {
+            var node = { id: 'test', type: 'compute' };
+            var graph = { context: {} };
+
+            this.sandbox.stub(workflowApiService, 'findActiveGraphForTarget').resolves(graph);
+            this.sandbox.stub(taskProtocol, 'requestProfile').resolves('profile');
+            this.sandbox.stub(taskProtocol, 'requestProperties').resolves({});
+            this.sandbox.stub(taskProtocol, 'activeTaskExists').resolves(null);
+
+            return profileApiService.getProfileFromTaskOrNode(node)
+            .then(function(result) {
+                expect(workflowApiService.findActiveGraphForTarget).to.have.been.calledOnce;
+                expect(taskProtocol.requestProfile).to.have.been.calledOnce;
+                expect(taskProtocol.requestProperties).to.have.been.calledOnce;
+                expect(taskProtocol.activeTaskExists).to.been.calledOnce;
+                expect(result).to.deep.equal({
+                    context: graph.context,
+                    profile: 'profile', 
+                    options: { kargs: null},
                 });
             });
         });
@@ -307,6 +338,7 @@ describe("Http.Services.Api.Profiles", function () {
             this.sandbox.stub(workflowApiService, 'findActiveGraphForTarget').resolves(true);
             this.sandbox.stub(taskProtocol, 'requestProfile').resolves('profile');
             this.sandbox.stub(taskProtocol, 'requestProperties').rejects(new Error(''));
+            this.sandbox.stub(taskProtocol, 'activeTaskExists').resolves({taskId: "taskId"});
 
             var promise = profileApiService.getProfileFromTaskOrNode(node);
 
