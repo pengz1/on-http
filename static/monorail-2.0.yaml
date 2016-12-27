@@ -425,6 +425,58 @@ paths:
       - Write
       - configModify
     x-swagger-router-controller: config
+  /config/hooks:
+    get:
+      description: Get the RackHD hooks configuration properties.
+      operationId: configHooksGetAll
+      responses:
+        200:
+          description: Successfully retrieved the hook configuration
+          schema:
+            type: object
+        default:
+          description: Unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+      summary: Get hooks configuration
+      tags:
+      - /api/2.0
+      x-authentication-type:
+      - jwt
+      x-privileges:
+      - Read
+      - configRead
+    post:
+      consumes:
+      - application/json
+      description: Create RackHD hooks configuration.
+      operationId: configHooksPost
+      parameters:
+      - description: configuration hooks to be created
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/Hooks.2.0_HooksPost'
+      responses:
+        201:
+          description: Successfully created new hooks
+          schema:
+            type: object
+        default:
+          description: Unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+      summary: Post hooks
+      tags:
+      - /api/2.0
+      x-authentication-type:
+      - jwt
+      x-privileges:
+      - Write
+      - hooksWrite
+      x-swagger-schema: lookups.2.0.json#/definitions/LookupPost
+    x-swagger-router-controller: lookups
   /files:
     get:
       description: Get a list of all files currently stored.

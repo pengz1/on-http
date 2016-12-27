@@ -1,0 +1,42 @@
+{
+    "title": "Hooks.2.0",
+    "definitions": {
+        "HookBase": {
+            "description": "A hook template",
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string",
+                    "format": "uri"
+                },
+                "contentType": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "filters": {
+                    "type": "object"
+                }
+            },
+            "required": [ "address" ],
+            "additionalProperties": false
+        },
+        "HookArray": {
+            "description": "A hook list",
+            "type": "array",
+            "items": {
+                "$ref", "#/definitions/HookBase"
+            },
+            "uniqueItems": true
+        }
+        "HooksPost": {
+            "anyOf": [
+                { "$ref": "#/definitions/HookBase" },
+                { "$ref": "#/definitions/HookArray" }
+            ]
+        }
+    }
+}
+
+    
